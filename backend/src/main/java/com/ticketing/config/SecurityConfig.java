@@ -1,5 +1,6 @@
 package com.ticketing.config;
 
+import org.springframework.http.HttpMethod;
 import com.ticketing.repository.UserRepository;
 import com.ticketing.service.JwtService;
 import jakarta.servlet.FilterChain;
@@ -55,6 +56,7 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .authorizeHttpRequests(auth -> auth
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // ⭐ ADD THIS LINE
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()

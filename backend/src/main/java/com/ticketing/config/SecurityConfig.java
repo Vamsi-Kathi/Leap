@@ -56,7 +56,7 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // ⭐ ADD THIS LINE
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
@@ -122,7 +122,9 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    // 🔥 FIXED FILTER
     public static class JwtAuthFilter extends OncePerRequestFilter {
+
         private final JwtService jwtService;
 
         public JwtAuthFilter(JwtService jwtService) {
@@ -132,6 +134,14 @@ public class SecurityConfig {
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                 FilterChain filterChain) throws ServletException, IOException {
+
+            String path = request.getRequestURI();
+
+            // ✅ CRITICAL FIX: skip auth endpoints
+            if (path.startsWith("/api/auth")) {
+                filterChain.doFilter(request, response);
+                return;
+            }
 
             String authHeader = request.getHeader("Authorization");
 
@@ -150,6 +160,7 @@ public class SecurityConfig {
                     SimpleGrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + role);
                     UsernamePasswordAuthenticationToken authentication =
                         new UsernamePasswordAuthenticationToken(email, null, Collections.singletonList(authority));
+
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 }

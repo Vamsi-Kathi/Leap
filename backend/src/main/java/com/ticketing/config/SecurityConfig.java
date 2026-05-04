@@ -91,7 +91,7 @@ public class SecurityConfig {
         return new JwtAuthFilter(jwtService);
     }
 
-    @Bean
+@Bean
     public UserDetailsService userDetailsService() {
         return email -> {
             com.ticketing.entity.User user = userRepository.findByEmail(email)
@@ -99,7 +99,7 @@ public class SecurityConfig {
             return org.springframework.security.core.userdetails.User.builder()
                 .username(user.getEmail())
                 .password(user.getPassword())
-                .roles(user.getRole().name())
+                .authorities(user.getRole().name())
                 .build();
         };
     }
@@ -122,7 +122,6 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
-    // 🔥 FIXED FILTER
     public static class JwtAuthFilter extends OncePerRequestFilter {
 
         private final JwtService jwtService;
@@ -137,33 +136,40 @@ public class SecurityConfig {
 
             String path = request.getRequestURI();
 
-            // ✅ CRITICAL FIX: skip auth endpoints
-            if (path.startsWith("/api/auth")) {
+            // Skip public endpoints completely
+            if (path.startsWith("/api/auth/")) {
                 filterChain.doFilter(request, response);
                 return;
             }
 
             String authHeader = request.getHeader("Authorization");
 
-            if (authHeader != null && authHeader.startsWith("Bearer ")) {
-                String token = authHeader.substring(7);
+            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                filterChain.doFilter(request, response);
+                return;
+            }
 
-                if (jwtService.validateToken(token)) {
-                    String email = jwtService.extractEmail(token);
-                    Long userId = jwtService.extractUserId(token);
-                    String role = jwtService.extractRole(token);
+            String token = authHeader.substring(7);
+            if (!jwtService.validateToken(token)) {
+                filterChain.doFilter(request, response);
+                return;
+            }
 
-                    request.setAttribute("userId", userId);
-                    request.setAttribute("email", email);
-                    request.setAttribute("role", role);
+            String email = jwtService.extractEmail(token);
+            Long userId = jwtService.extractUserId(token);
+            String role = jwtService.extractRole(token);
 
-                    SimpleGrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + role);
-                    UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(email, null, Collections.singletonList(authority));
+            if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                request.setAttribute("userId", userId);
+                request.setAttribute("email", email);
+                request.setAttribute("role", role);
 
-                    authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
-                }
+                SimpleGrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + role);
+                UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                    email, null, Collections.singletonList(authority));
+
+                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authentication);
             }
 
             filterChain.doFilter(request, response);

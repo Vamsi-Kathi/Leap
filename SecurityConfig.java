@@ -17,7 +17,6 @@ import org.springframework.security.authentication.dao.DaoAuthenticationProvider
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -52,18 +51,15 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http
-            .csrf(AbstractHttpConfigurer::disable)
+        http.csrf(csrf -> csrf.disable())
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/api/auth/**", "/api/auth/login", "/api/auth/register").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
-            .sessionManagement(session -> session
-                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-            )
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authenticationProvider(authenticationProvider())
             .addFilterBefore(jwtAuthFilter(), UsernamePasswordAuthenticationFilter.class);
 
@@ -73,10 +69,9 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        List<String> origins = Arrays.asList(allowedOrigins.split(","));
-        configuration.setAllowedOrigins(origins);
-        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "X-Requested-With", "Accept"));
+        configuration.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With", "Accept"));
         configuration.setExposedHeaders(List.of("Authorization"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
@@ -88,28 +83,26 @@ public class SecurityConfig {
 
     @Bean
     public JwtAuthFilter jwtAuthFilter() {
-        return new JwtAuthFilter(jwtService);
+        return new JwtAuthFilter(jwtService, userRepository);
     }
 
-@Bean
+    @Bean
     public UserDetailsService userDetailsService() {
-        return email -> {
-            com.ticketing.entity.User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + email));
-            return org.springframework.security.core.userdetails.User.builder()
+        return username -> userRepository.findByEmail(username)
+            .map(user -> org.springframework.security.core.userdetails.User.builder()
                 .username(user.getEmail())
                 .password(user.getPassword())
                 .roles(user.getRole().name())
-                .build();
-        };
+                .build())
+            .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
     }
 
     @Bean
     public AuthenticationProvider authenticationProvider() {
-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
-        provider.setUserDetailsService(userDetailsService());
-        provider.setPasswordEncoder(passwordEncoder());
-        return provider;
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(userDetailsService());
+        authProvider.setPasswordEncoder(passwordEncoder());
+        return authProvider;
     }
 
     @Bean
@@ -123,54 +116,48 @@ public class SecurityConfig {
     }
 
     public static class JwtAuthFilter extends OncePerRequestFilter {
-
         private final JwtService jwtService;
+        private final UserRepository userRepository;
 
-        public JwtAuthFilter(JwtService jwtService) {
+        public JwtAuthFilter(JwtService jwtService, UserRepository userRepository) {
             this.jwtService = jwtService;
+            this.userRepository = userRepository;
         }
 
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
-                FilterChain filterChain) throws ServletException, IOException {
-
-            // Skip ALL /api/auth/** endpoints BEFORE any token processing
+                                      FilterChain chain) throws ServletException, IOException {
+            String path = request.getRequestURI();
+            
+            // Skip completely for public endpoints
             if (path.startsWith("/api/auth")) {
-                filterChain.doFilter(request, response);
+                chain.doFilter(request, response);
                 return;
             }
 
-            String authHeader = request.getHeader("Authorization");
+            String header = request.getHeader("Authorization");
+            if (header != null && header.startsWith("Bearer ")) {
+                String token = header.substring(7);
+                try {
+                    if (jwtService.validateToken(token)) {
+                        String email = jwtService.extractEmail(token);
+                        userRepository.findByEmail(email).ifPresent(user -> {
+                            request.setAttribute("userId", user.getId());
+                            request.setAttribute("email", user.getEmail());
+                            request.setAttribute("role", user.getRole().name());
 
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                filterChain.doFilter(request, response);
-                return;
+                            SimpleGrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + user.getRole().name());
+                            UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                                user.getEmail(), null, Collections.singletonList(authority));
+                            auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                            SecurityContextHolder.getContext().setAuthentication(auth);
+                        });
+                    }
+                } catch (Exception ignored) {
+                }
             }
 
-            String token = authHeader.substring(7);
-            if (!jwtService.validateToken(token)) {
-                filterChain.doFilter(request, response);
-                return;
-            }
-
-            String email = jwtService.extractEmail(token);
-            Long userId = jwtService.extractUserId(token);
-            String role = jwtService.extractRole(token);
-
-            if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                request.setAttribute("userId", userId);
-                request.setAttribute("email", email);
-                request.setAttribute("role", role);
-
-                SimpleGrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + role);
-                UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                    email, null, Collections.singletonList(authority));
-
-                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(authentication);
-            }
-
-            filterChain.doFilter(request, response);
+            chain.doFilter(request, response);
         }
     }
 }

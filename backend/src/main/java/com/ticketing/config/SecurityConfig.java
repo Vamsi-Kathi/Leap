@@ -99,7 +99,7 @@ public class SecurityConfig {
             return org.springframework.security.core.userdetails.User.builder()
                 .username(user.getEmail())
                 .password(user.getPassword())
-                .authorities(user.getRole().name())
+                .roles(user.getRole().name())
                 .build();
         };
     }
@@ -136,8 +136,8 @@ public class SecurityConfig {
 
             String path = request.getRequestURI();
 
-            // Skip public endpoints completely
-            if (path.startsWith("/api/auth/")) {
+            // Skip public endpoints completely - exact match for login/register
+            if (path.startsWith("/api/auth/login") || path.startsWith("/api/auth/register")) {
                 filterChain.doFilter(request, response);
                 return;
             }
